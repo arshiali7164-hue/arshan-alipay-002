@@ -1,0 +1,6 @@
+{
+  "name": "Mahraj Pay",
+  "description": "A simulated UPI payment application with a clean, utility-focused interface.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

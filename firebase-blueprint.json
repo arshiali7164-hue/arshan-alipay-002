@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with real-time balance for the Mahraj Pay wallet",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "upiId": { "type": "string" },
+        "balance": { "type": "number" },
+        "emoji": { "type": "string" }
+      },
+      "required": ["name", "phone", "upiId", "balance", "emoji"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Records real time money transfer operations between two users",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "receiverName": { "type": "string" },
+        "amount": { "type": "number" },
+        "timestamp": { "type": "object" }
+      },
+      "required": ["senderId", "receiverId", "senderName", "receiverName", "amount", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles"
+    },
+    "/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Transactions log"
+    }
+  }
+}
