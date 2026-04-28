@@ -11,42 +11,36 @@ service cloud.firestore {
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['name', 'phone', 'upiId', 'balance', 'emoji'])
+      return data.keys().hasAll(['name', 'phone', 'upiId', 'emoji'])
           && data.name is string && data.name.size() > 0 && data.name.size() <= 100
           && data.phone is string && data.phone.size() <= 20
-          && data.upiId is string && data.upiId.size() <= 50
-          && data.balance is number
+          && data.upiId is string && data.upiId.size() <= 100
           && data.emoji is string && data.emoji.size() <= 10;
     }
 
     function isValidTransaction(data) {
-      return data.keys().hasAll(['senderId', 'receiverId', 'senderName', 'receiverName', 'amount', 'timestamp'])
+      return data.keys().hasAll(['senderId', 'receiverId', 'senderName', 'receiverName', 'amount', 'timestamp', 'status'])
           && data.senderId is string && data.receiverId is string
           && data.senderName is string && data.receiverName is string
           && data.amount is number && data.amount > 0
-          && data.timestamp == request.time;
+          && data.timestamp == request.time
+          && data.status is string;
     }
 
     match /users/{userId} {
-      // Allows global UPI search
       allow get: if isSignedIn() && isValidId(userId);
       allow list: if isSignedIn();
       
-      // Enforce rigorous new user scheme with startup balance
       allow create: if isSignedIn() && request.auth.uid == userId
-                    && isValidUser(incoming())
-                    && incoming().balance == 10000;
+                    && isValidUser(incoming());
                     
-      // Balance updates only allowed when changing balance explicitly via isolated atomic transaction batches
-      allow update: if isSignedIn()
-                    && isValidUser(incoming())
-                    && incoming().diff(existing()).affectedKeys().hasOnly(['balance']);
+      allow update: if isSignedIn() && request.auth.uid == userId
+                    && isValidUser(incoming());
     }
     
     match /transactions/{txId} {
       allow read: if isSignedIn() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
       
-      // Strict constraints locking transaction schema layout
       allow create: if isSignedIn() 
                     && incoming().senderId == request.auth.uid
                     && isValidTransaction(incoming());

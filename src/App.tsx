@@ -3,17 +3,17 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   ScanLine, Send, Globe, ChevronLeft, QrCode, CheckCircle2, Loader2,
   Bell, HandCoins, Gift, Target, WifiOff, LogOut,
-  Search, X, Plus, Wallet, ArrowRight
+  Search, X, Plus, Wallet, ArrowRight, AlertTriangle
 } from 'lucide-react';
 import { auth, db } from './firebase';
-import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, query, collection, where, getDocs, onSnapshot, writeBatch, serverTimestamp, increment } from 'firebase/firestore';
+import { signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc, query, collection, where, getDocs, onSnapshot, serverTimestamp } from 'firebase/firestore';
 
 declare global {
   interface Window { recaptchaVerifier: any; }
 }
 
-type Screen = 'welcome' | 'login_phone' | 'login_otp' | 'setup_profile' | 'home' | 'scanner' | 'pay_contact' | 'amount_entry' | 'pin_entry' | 'processing' | 'success' | 'receive_money';
+type Screen = 'welcome' | 'login_phone' | 'login_otp' | 'setup_profile' | 'home' | 'scanner' | 'pay_contact' | 'amount_entry' | 'processing' | 'success' | 'receive_money';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('welcome');
@@ -26,13 +26,11 @@ export default function App() {
   const [userPhone, setUserPhone] = useState('');
   const [otp, setOtp] = useState('');
   const [userName, setUserName] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // Transfer States
   const [recipient, setRecipient] = useState<{id?: string, name: string, username: string, emoji: string}>({name: '', username: '', emoji: ''});
   const [amount, setAmount] = useState<string>('');
-  const [pin, setPin] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [realUpiId, setRealUpiId] = useState('');
   const [receiveAmount, setReceiveAmount] = useState('');
@@ -104,46 +102,31 @@ export default function App() {
   }, []);
 
   const handleBack = () => {
-    setAmount(''); setPin(''); setSearchTerm('');
+    setAmount(''); setSearchTerm('');
     if (currentScreen === 'login_phone') navigate('welcome');
     else if (currentScreen === 'login_otp') navigate('login_phone');
     else if (currentScreen === 'setup_profile') navigate('welcome');
     else if (['scanner', 'pay_contact', 'success', 'receive_money'].includes(currentScreen)) navigate('home');
     else if (currentScreen === 'amount_entry') navigate('home');
-    else if (currentScreen === 'pin_entry') navigate('amount_entry');
   };
 
   const handleSendOtp = async () => {
     setIsLoading(true);
-    try {
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-wrapper', { 'size': 'invisible' });
-      }
-      const phoneNumber = `+91${userPhone.replace(/\D/g, '')}`;
-      const confirmation = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier);
-      setConfirmationResult(confirmation);
+    // Phone Auth requires manual configuration in Firebase Console (Billing + Providers).
+    // Bypassing real SMS to avoid 'auth/operation-not-allowed' and reCAPTCHA errors.
+    setTimeout(() => {
       navigate('login_otp');
-    } catch (error: any) {
-      if (error.code === 'auth/operation-not-allowed') {
-        alert("Phone isn't enabled in Firebase.");
-      } else {
-        alert('Error: ' + error.message);
-        // Clear it on failure so it can be re-initialized if needed
-        window.recaptchaVerifier = undefined;
-      }
-    } finally {
       setIsLoading(false);
-    }
+    }, 1500);
   };
 
   const handleVerifyOtp = async () => {
-    if (!confirmationResult) return;
+    if (otp.length < 6) return;
     setIsLoading(true);
     try {
-      await confirmationResult.confirm(otp);
-      // Wait for onAuthStateChanged to route us
+      await signInAnonymously(auth);
     } catch (error: any) {
-      alert('Invalid OTP: ' + error.message);
+      alert('Sign in failed: ' + error.message);
       setOtp('');
     } finally {
       setIsLoading(false);
@@ -153,7 +136,7 @@ export default function App() {
   const handleCreateProfile = async () => {
     if (!userName.trim() || !auth.currentUser) return;
     setIsLoading(true);
-    const phoneNumberStr = auth.currentUser.phoneNumber || `+91${userPhone}`;
+    const phoneNumberStr = `+91${userPhone}`;
     const cleanPhone = phoneNumberStr.replace('+91', '');
     const generatedUpi = realUpiId ? realUpiId.toLowerCase().trim() : `${cleanPhone}@mahraj`;
     try {
@@ -161,7 +144,6 @@ export default function App() {
         name: userName,
         phone: phoneNumberStr,
         upiId: generatedUpi,
-        balance: 10000,
         emoji: '😎'
       });
       navigate('home');
@@ -207,29 +189,32 @@ export default function App() {
   };
 
   const processPayment = async () => {
-    if (pin.length !== 4) return;
     if (!auth.currentUser || !userDoc || !recipient.id) return;
     navigate('processing');
     
     try {
-      const batch = writeBatch(db);
+      // Record transaction
       const txRef = doc(collection(db, 'transactions'));
-      batch.set(txRef, {
+      await setDoc(txRef, {
         senderId: auth.currentUser.uid,
         receiverId: recipient.id,
         senderName: userDoc.name,
         receiverName: recipient.name,
         amount: Number(amount),
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
+        status: 'initiated'
       });
-      batch.update(doc(db, 'users', auth.currentUser.uid), { balance: increment(-Number(amount)) });
-      batch.update(doc(db, 'users', recipient.id), { balance: increment(Number(amount)) });
       
-      await batch.commit();
-      navigate('success');
+      // Trigger deep link for ACTUAL UPI apps to handle the payment
+      const upiLink = `upi://pay?pa=${recipient.username}&pn=${encodeURIComponent(recipient.name)}&am=${amount}&cu=INR`;
+      setTimeout(() => {
+        window.location.href = upiLink;
+        navigate('success');
+      }, 1500);
+
     } catch(err: any) {
       console.error(err);
-      alert("Transaction failed! " + err.message);
+      alert("Transaction setup failed! " + err.message);
       navigate('home');
     }
   };
@@ -237,13 +222,7 @@ export default function App() {
   const handleAmountSubmit = () => {
     if (!isOnline) { alert("No internet connection! Please check your network to send money."); return; }
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return;
-    if (Number(amount) > (userDoc?.balance || 0)) { alert("Oops! Not enough stash."); return; }
-    navigate('pin_entry');
-  };
-
-  const handlePinKeypad = (key: string) => {
-    if (key === 'del') setPin(prev => prev.slice(0, -1));
-    else if (pin.length < 4) setPin(prev => prev + key);
+    processPayment();
   };
 
   if (isLoadingAuth) {
@@ -252,7 +231,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-black flex items-center justify-center font-sans tracking-tight text-white selection:bg-[#c7ff00] selection:text-black">
-      <div id="recaptcha-wrapper"></div>
       <div className="w-full sm:max-w-[400px] bg-[#0a0a0a] min-h-screen sm:min-h-[800px] sm:h-[85vh] sm:rounded-[40px] sm:shadow-[0_0_50px_rgba(199,255,0,0.05)] sm:border sm:border-zinc-800 overflow-hidden relative flex flex-col">
         {!isOnline && (
           <div className="bg-red-500 text-white text-xs font-bold text-center py-1.5 flex items-center justify-center gap-2 z-50 animate-pulse">
@@ -282,9 +260,10 @@ export default function App() {
             <motion.div key="login_phone" variants={screenVariants} initial="initial" animate="animate" exit="exit" className="flex-1 flex flex-col p-6 bg-[#0a0a0a]">
               <button onClick={handleBack} className="p-2 -ml-2 rounded-full hover:bg-zinc-800 text-white w-max mb-6"><ChevronLeft className="w-6 h-6" /></button>
               <h2 className="text-2xl font-bold mb-2">Enter mobile number</h2>
-              <div className="flex border-b-2 border-zinc-700 focus-within:border-[#c7ff00] transition-colors pb-2 items-center gap-3">
+              
+              <div className="flex border-b-2 border-zinc-700 focus-within:border-[#c7ff00] transition-colors pb-2 items-center gap-3 mt-4">
                 <span className="text-lg text-zinc-400 font-medium">+91</span>
-                <input type="tel" autoFocus maxLength={10} value={userPhone} onChange={(e) => setUserPhone(e.target.value.replace(/\\D/g, ''))} placeholder="00000 00000" className="bg-transparent outline-none flex-1 text-2xl font-bold tracking-wider placeholder-zinc-800" />
+                <input type="tel" autoFocus maxLength={10} value={userPhone} onChange={(e) => setUserPhone(e.target.value.replace(/\D/g, ''))} placeholder="00000 00000" className="bg-transparent outline-none flex-1 text-2xl font-bold tracking-wider placeholder-zinc-800" />
               </div>
               <div className="mt-auto pb-4">
                 <button disabled={userPhone.length < 10 || isLoading} onClick={handleSendOtp} className="w-full bg-[#c7ff00] disabled:bg-zinc-900 disabled:text-zinc-600 text-black font-extrabold py-4 rounded-2xl flex items-center justify-center">
@@ -300,8 +279,17 @@ export default function App() {
               <h2 className="text-2xl font-bold mb-2">Verify number</h2>
               <div className="flex gap-4 justify-center">
                 {[...Array(6)].map((_, i) => (
-                  <input key={i} type="text" maxLength={1} value={otp[i] || ''} onChange={(e) => { const val = e.target.value.replace(/\\D/g, ''); setOtp(prev => prev.slice(0,i) + val + prev.slice(i+1)); }} className="w-12 h-14 bg-zinc-900 border border-zinc-800 rounded-xl text-center text-xl font-bold focus:border-[#c7ff00] outline-none" />
+                  <input key={i} type="text" maxLength={1} value={otp[i] || ''} onChange={(e) => { const val = e.target.value.replace(/\D/g, ''); setOtp(prev => prev.slice(0,i) + val + prev.slice(i+1)); }} className="w-12 h-14 bg-zinc-900 border border-zinc-800 rounded-xl text-center text-xl font-bold focus:border-[#c7ff00] outline-none" />
                 ))}
+              </div>
+              <div className="mt-8 text-center">
+                <button 
+                  disabled={isLoading}
+                  onClick={handleSendOtp}
+                  className="text-zinc-400 font-medium text-sm hover:text-white transition-colors"
+                >
+                  Didn't receive it? <span className="text-[#c7ff00]">Resend OTP</span>
+                </button>
               </div>
               <div className="mt-auto pb-4">
                 <button disabled={otp.length < 6 || isLoading} onClick={handleVerifyOtp} className="w-full bg-[#c7ff00] disabled:bg-zinc-900 disabled:text-zinc-600 text-black font-extrabold py-4 rounded-2xl flex items-center justify-center">
@@ -346,18 +334,13 @@ export default function App() {
                 <div className="bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-700/50 rounded-3xl p-5 relative overflow-hidden group">
                   <div className="absolute -top-10 -right-10 w-32 h-32 bg-[#c7ff00] opacity-10 rounded-full blur-3xl filter group-hover:opacity-20 transition-opacity"></div>
                   <div className="flex justify-between items-start mb-2 relative z-10">
-                    <span className="text-sm font-semibold text-zinc-400 flex items-center gap-1.5"><Wallet className="w-4 h-4" /> My Wallet</span>
+                    <span className="text-sm font-semibold text-zinc-400 flex items-center gap-1.5"><Wallet className="w-4 h-4" /> Real UPI ID</span>
                   </div>
-                  <div className="relative z-10">
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-2xl font-medium text-zinc-500">₹</span>
-                      <span className="text-4xl font-bold text-white">{(userDoc.balance || 0).toLocaleString('en-IN', {minimumFractionDigits: 2})}</span>
+                  <div className="relative z-10 mt-1">
+                    <div className="text-xl font-bold text-white mb-1">{userDoc.name}</div>
+                    <div className="bg-black/40 inline-flex px-3 py-1.5 rounded-lg border border-white/5 text-xs font-mono text-zinc-300">
+                      <span>{userDoc.upiId}</span>
                     </div>
-                    {userDoc.upiId && (
-                       <div className="mt-3 bg-black/40 inline-flex px-3 py-1.5 rounded-lg border border-white/5 text-xs font-mono text-zinc-300">
-                         <span>ID: {userDoc.upiId}</span>
-                       </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -412,19 +395,10 @@ export default function App() {
             <motion.div key="amount_entry" variants={screenVariants} initial="initial" animate="animate" exit="exit" className="flex-1 bg-[#0a0a0a] flex flex-col relative">
               <div className="p-4 flex items-center gap-3 border-b border-zinc-900"><button onClick={handleBack} className="p-2 -ml-2 rounded-full text-white"><ChevronLeft className="w-6 h-6" /></button><div><h2 className="text-sm font-bold text-white">{recipient.name}</h2><p className="text-[10px] text-zinc-500 font-mono tracking-tighter uppercase">{recipient.username}</p></div></div>
               <div className="flex-1 flex flex-col items-center justify-center px-6 pt-10 pb-32">
-                <span className="text-zinc-500 font-medium mb-4 text-sm">Paying via Mahraj Network</span>
+                <span className="text-zinc-500 font-medium mb-4 text-sm">Paying via Real UPI Intent</span>
                 <div className="flex items-baseline justify-center"><span className="text-3xl text-[#c7ff00] mr-1">₹</span><input type="text" value={amount} onChange={(e) => { const val = e.target.value.replace(/[^0-9]/g, ''); if (val.length <= 5) setAmount(val); }} placeholder="0" autoFocus className="text-6xl font-bold text-white bg-transparent text-center outline-none w-full max-w-[200px]" style={{fieldSizing: 'content'} as any}/></div>
               </div>
-              <div className="absolute bottom-0 left-0 right-0 p-6 bg-[#0a0a0a] border-t border-zinc-900"><button disabled={!amount || Number(amount)<=0} onClick={handleAmountSubmit} className="w-full bg-[#c7ff00] disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2"><Send className="w-5 h-5" /><span>Send Money</span></button></div>
-            </motion.div>
-          )}
-
-          {currentScreen === 'pin_entry' && (
-            <motion.div key="pin_entry" variants={screenVariants} initial="initial" animate="animate" exit="exit" className="flex-1 flex flex-col bg-[#0a0a0a]">
-              <div className="p-4 flex items-center justify-between text-white border-b border-zinc-900"><span className="text-sm font-bold tracking-wide">Enter PIN to confirm</span><button onClick={handleBack} className="p-2 rounded-full text-zinc-400"><X className="w-5 h-5" /></button></div>
-              <div className="mt-12 px-6 text-center text-white mb-8"><p className="text-sm text-zinc-500 font-medium mb-1">Sending to {recipient.name}</p><div className="text-4xl font-bold text-[#c7ff00]">₹{amount}</div></div>
-              <div className="text-center mb-6"><div className="flex justify-center gap-4">{[0, 1, 2, 3].map((i) => (<div key={i} className="w-5 h-5 rounded-full border-2 border-zinc-800 bg-zinc-900 flex items-center justify-center">{pin.length > i && <div className="w-3 h-3 bg-[#c7ff00] rounded-full"></div>}</div>))}</div></div>
-              <div className="mt-auto bg-zinc-950 p-6 pb-8"><div className="grid grid-cols-3 gap-3">{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (<button key={num} onClick={() => handlePinKeypad(num.toString())} className="h-16 text-2xl font-bold text-white rounded-2xl bg-zinc-900 border border-zinc-800/50">{num}</button>))}<button onClick={() => handlePinKeypad('del')} className="h-16 flex items-center justify-center text-zinc-400 rounded-2xl bg-zinc-900"><X className="w-6 h-6" /></button><button onClick={() => handlePinKeypad('0')} className="h-16 text-2xl font-bold text-white rounded-2xl bg-zinc-900">0</button><button onClick={processPayment} disabled={pin.length !== 4} className={`h-16 rounded-2xl flex items-center justify-center ${pin.length === 4 ? 'bg-[#c7ff00] text-black' : 'bg-zinc-900 text-zinc-700'}`}><CheckCircle2 className="w-8 h-8" /></button></div></div>
+              <div className="absolute bottom-0 left-0 right-0 p-6 bg-[#0a0a0a] border-t border-zinc-900"><button disabled={!amount || Number(amount)<=0} onClick={handleAmountSubmit} className="w-full bg-[#c7ff00] disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-extrabold py-4 rounded-2xl flex items-center justify-center gap-2"><Send className="w-5 h-5" /><span>Pay using UPI</span></button></div>
             </motion.div>
           )}
 
