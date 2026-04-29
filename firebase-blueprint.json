@@ -39,3 +39,16 @@
     }
   }
 }
+hash_config {
+
+  algorithm: SCRYPT,
+
+  base64_signer_key: pZxJmZFxm5yOv1+nsZyVD1kr60BFvsSpMr7fsObwqedT5LdRlPcw2HtRCsOsxKnPbcBnpFxES10OqW1jZbjUjA==,
+
+  base64_salt_separator: Bw==,
+
+  rounds: 8,
+
+  mem_cost: 14,
+
+} 

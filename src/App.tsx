@@ -6,7 +6,7 @@ import {
   Search, X, Plus, Wallet, ArrowRight, AlertTriangle
 } from 'lucide-react';
 import { auth, db } from './firebase';
-import { signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, signOut, RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from 'firebase/auth';
 import { doc, getDoc, setDoc, query, collection, where, getDocs, onSnapshot, serverTimestamp } from 'firebase/firestore';
 
 declare global {
@@ -26,6 +26,7 @@ export default function App() {
   const [userPhone, setUserPhone] = useState('');
   const [otp, setOtp] = useState('');
   const [userName, setUserName] = useState('');
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // Transfer States
@@ -112,21 +113,46 @@ export default function App() {
 
   const handleSendOtp = async () => {
     setIsLoading(true);
-    // Phone Auth requires manual configuration in Firebase Console (Billing + Providers).
-    // Bypassing real SMS to avoid 'auth/operation-not-allowed' and reCAPTCHA errors.
-    setTimeout(() => {
+    try {
+      if (!window.recaptchaVerifier) {
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-wrapper', { 'size': 'invisible' });
+      }
+      
+      const phoneNumber = `+91${userPhone.replace(/\D/g, '')}`;
+      const confirmation = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier);
+      setConfirmationResult(confirmation);
       navigate('login_otp');
+    } catch (error: any) {
+      console.error(error);
+      // Clear recaptcha on error to allow for retry safely
+      if (window.recaptchaVerifier) {
+        try {
+          window.recaptchaVerifier.clear();
+        } catch (e) {}
+        window.recaptchaVerifier = undefined;
+      }
+      const recaptchaWrapper = document.getElementById('recaptcha-wrapper');
+      if (recaptchaWrapper) {
+         recaptchaWrapper.innerHTML = '';
+      }
+
+      if (error.code === 'auth/operation-not-allowed') {
+        alert("CRITICAL ERROR:\n\nYou MUST enable 'Phone' authentication in your Firebase Console.\n\n1. Go to Firebase Console\n2. Click 'Authentication'\n3. Click 'Sign-in method'\n4. Click 'Phone' and Enable it.\n5. Save and try again.");
+      } else {
+        alert('Verification Failed: ' + error.message + '\n\nIMPORTANT: If using the AI Studio preview, you MUST open the app in a NEW TAB to receive SMS. If reCAPTCHA is blocked, SMS will not send.');
+      }
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
   const handleVerifyOtp = async () => {
-    if (otp.length < 6) return;
+    if (otp.length < 6 || !confirmationResult) return;
     setIsLoading(true);
     try {
-      await signInAnonymously(auth);
+      await confirmationResult.confirm(otp);
     } catch (error: any) {
-      alert('Sign in failed: ' + error.message);
+      alert('Invalid OTP: ' + error.message);
       setOtp('');
     } finally {
       setIsLoading(false);
@@ -231,6 +257,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-black flex items-center justify-center font-sans tracking-tight text-white selection:bg-[#c7ff00] selection:text-black">
+      <div id="recaptcha-wrapper"></div>
       <div className="w-full sm:max-w-[400px] bg-[#0a0a0a] min-h-screen sm:min-h-[800px] sm:h-[85vh] sm:rounded-[40px] sm:shadow-[0_0_50px_rgba(199,255,0,0.05)] sm:border sm:border-zinc-800 overflow-hidden relative flex flex-col">
         {!isOnline && (
           <div className="bg-red-500 text-white text-xs font-bold text-center py-1.5 flex items-center justify-center gap-2 z-50 animate-pulse">
